@@ -15,6 +15,7 @@
     "dotenv": "^17.3.1",
     "ioredis": "^5.10.0",
     "pino": "^10.3.1",
+    "shared": "workspace:*",
     "zod": "^4.3.6"
   },
   "devDependencies": {
