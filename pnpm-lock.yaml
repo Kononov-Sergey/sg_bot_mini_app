@@ -52,7 +52,7 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
-  apps/miniapp-web:
+  apps/web:
     dependencies:
       '@tanstack/react-query':
         specifier: ^5.90.21
