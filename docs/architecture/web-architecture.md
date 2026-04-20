@@ -16,11 +16,13 @@
 
 ### In scope
 
+- доступ к части функционала без регистрации для onboarding и demo/trial опыта;
 - пользователь загружает исходное изображение;
 - выбирает модель и параметры генерации;
 - запускает генерацию и получает результат;
 - отслеживает статус job через REST и WebSocket;
-- система поддерживает очередь, повторы и базовую наблюдаемость.
+- система поддерживает очередь, повторы и базовую наблюдаемость;
+- продукт умеет конвертировать гостя в зарегистрированного пользователя без потери контекста demo-сессии.
 
 ### Out of scope
 
@@ -33,6 +35,7 @@
 
 - **Web-only:** продукт строится только вокруг веб-клиента без дополнительных платформенных адаптеров.
 - **Async first:** генерация не блокирует жизненный цикл HTTP-запроса.
+- **Progressive onboarding:** пользователь может увидеть ценность продукта до регистрации, а регистрация появляется в момент максимальной мотивации.
 - **Provider isolation:** интеграция с AI-провайдером живет за отдельным adapter/service слоем.
 - **Privacy by default:** сохраняются только метаданные, а не бинарные медиа.
 - **Idempotency:** создание и обработка job должны быть безопасны при повторных запросах.
@@ -45,6 +48,8 @@ flowchart LR
   userClient[User Browser] --> webClient[Web Client]
   webClient --> apiGateway[Fastify API]
   apiGateway --> authModule[Auth Module]
+  authModule --> guestSession[Guest Session]
+  authModule --> userSession[User Session]
   apiGateway --> jobsModule[Jobs Module]
   jobsModule --> postgresDb[PostgreSQL]
   jobsModule --> redisQueue[Redis BullMQ]
@@ -90,6 +95,8 @@ apps/web/src/
       state/
     features/
       auth/
+      onboarding/
+      demo-access/
       generation/
       job-status/
     shared/
@@ -101,13 +108,14 @@ apps/web/src/
 
 - TanStack Query хранит server state: `session`, `jobs`, `jobStatus`;
 - Zustand хранит UI state, временные формы и состояние websocket-подключения;
-- Zod валидирует все ответы API на boundary-уровне.
+- Zod валидирует все ответы API на boundary-уровне;
+- onboarding flow живет отдельно от основного app shell и умеет переводить гостя в регистрацию после первого ценностного результата.
 
 ## 7) Backend architecture
 
 ### 7.1 Границы модулей
 
-- `auth` - web auth strategy, issue/refresh session;
+- `auth` - guest/user auth strategy, email/password auth для MVP, issue/refresh session, upgrade guest -> user, future OAuth providers;
 - `users` - профиль и ограничения;
 - `jobs` - создание, чтение и отмена generation jobs;
 - `generation` - сборка provider request и orchestration;
@@ -142,15 +150,42 @@ apps/worker/src/
     provider.client.ts
 ```
 
-### 7.3 API contract v1
+### 7.3 Authentication model
+
+#### MVP
+
+- основной способ регистрации и входа: `email + password`;
+- сессия в web-клиенте хранится через `httpOnly`, `secure`, `sameSite` cookie;
+- `POST /v1/auth/register` создает account, хеширует пароль и выпускает user session;
+- `POST /v1/auth/login` проверяет email/password и выпускает user session;
+- `POST /v1/auth/refresh` ротирует/продлевает сессию;
+- guest user получает отдельную guest session и затем переводится в account через `POST /v1/auth/upgrade`;
+- подтверждение email желательно поддержать, но не делать жестким блокером до первого ценностного действия.
+
+#### Future extensions
+
+- future OAuth providers: `VK ID`, `Yandex ID`;
+- OAuth добавляется как дополнительный вход, а не замена `email + password`;
+- при OAuth login существующая guest session тоже должна уметь upgrade в user account без потери контекста.
+
+### 7.4 API contract v1
 
 #### REST
 
-- `POST /v1/auth/login` -> вход пользователя и выдача session token;
+- `POST /v1/auth/guest` -> создать анонимную demo-сессию;
+- `POST /v1/auth/login` -> вход по `email + password` и выдача session cookie;
+- `POST /v1/auth/register` -> регистрация по `email + password`;
+- `POST /v1/auth/upgrade` -> привязать guest-сессию к зарегистрированному аккаунту;
 - `POST /v1/auth/refresh` -> обновление сессии;
+- `GET /v1/demo/config` -> получить лимиты и продуктовые ограничения demo-режима;
 - `POST /v1/jobs` -> создание generation job;
 - `GET /v1/jobs/:jobId` -> снимок статуса job;
 - `POST /v1/jobs/:jobId/cancel` -> кооперативная отмена задачи.
+
+Future extension:
+
+- `GET /v1/auth/oauth/:provider/start` -> начало OAuth flow;
+- `GET /v1/auth/oauth/:provider/callback` -> завершение OAuth flow для `vk` и `yandex`.
 
 #### WebSocket events
 
@@ -159,12 +194,12 @@ apps/worker/src/
   - `jobs.unsubscribe` `{ jobId }`
 - server -> client:
   - `job.status` `{ jobId, status, progress?, errorCode?, completedAt? }`
-  - `job.result` `{ jobId, downloadUrl, expiresAt }`
+  - `job.result` `{ jobId, downloadUrl, expiresAt, demoRestricted? }`
 
-### 7.4 Queue semantics
+### 7.5 Queue semantics
 
 - очередь: `generation_jobs`;
-- payload: `userId`, `requestId`, `model`, `backgroundConfig`, `tempMediaRef`;
+- payload: `actorType`, `actorId`, `requestId`, `model`, `backgroundConfig`, `tempMediaRef`, `demoMode`;
 - retry policy:
   - attempts: `3`
   - backoff: exponential, base `5s`
@@ -173,6 +208,9 @@ apps/worker/src/
   - пометка job как `failed`
   - websocket event о неуспехе
   - сохранение failure category для аналитики
+- demo job policy:
+  - более строгие лимиты по размеру input, частоте вызовов и числу job на сессию
+  - приоритет не выше обычных платящих/зарегистрированных пользователей
 
 ## 8) Data model
 
@@ -181,11 +219,15 @@ apps/worker/src/
 ### 8.1 Core tables
 
 - `users`
-  - `id`, `email`, `created_at`, `status`
+  - `id`, `email`, `password_hash?`, `email_verified_at?`, `created_at`, `status`
+- `auth_identities`
+  - `id`, `user_id`, `provider`, `provider_user_id`, `created_at`
+- `guest_sessions`
+  - `id`, `device_fingerprint`, `created_at`, `expires_at`, `upgraded_to_user_id`, `last_seen_at`
 - `sessions`
   - `id`, `user_id`, `expires_at`, `created_at`, `revoked_at`
 - `generation_jobs`
-  - `id`, `user_id`, `status`, `model`, `background_preset`, `created_at`, `started_at`, `finished_at`, `error_code`
+  - `id`, `user_id?`, `guest_session_id?`, `status`, `model`, `background_preset`, `is_demo`, `created_at`, `started_at`, `finished_at`, `error_code`
 - `generation_requests`
   - `job_id`, `provider`, `provider_request_id`, `latency_ms`, `token_in`, `token_out`, `cost_estimate`
 - `audit_events`
@@ -193,10 +235,14 @@ apps/worker/src/
 
 ### 8.2 Indexing baseline
 
+- `users(email)` unique
+- `auth_identities(provider, provider_user_id)` unique
 - `generation_jobs(user_id, created_at desc)`
+- `generation_jobs(guest_session_id, created_at desc)`
 - `generation_jobs(status, created_at)`
 - `generation_requests(provider_request_id)`
 - `sessions(user_id, expires_at)`
+- `guest_sessions(expires_at)`
 
 ## 9) Privacy и security
 
@@ -212,7 +258,8 @@ apps/worker/src/
 - статус job;
 - технические метаданные;
 - latency и usage;
-- audit events.
+- audit events;
+- demo-конверсию: запуск onboarding, показ CTA, upgrade guest -> user.
 
 Нельзя хранить:
 
@@ -225,8 +272,18 @@ apps/worker/src/
 - redaction для логов;
 - секреты только через env/secret manager;
 - TLS на внешнем контуре;
-- rate limit по user и IP;
-- session/JWT с ротацией и сроками жизни.
+- rate limit по user, guest-session и IP;
+- `Argon2id` для хеширования паролей;
+- session cookie с ротацией, сроками жизни и защитой `httpOnly + secure + sameSite`;
+- OAuth state/nonce validation для будущих `VK ID` и `Yandex ID`.
+
+### 9.4 Ограничения demo-режима
+
+- ограниченное число генераций на гостевую сессию;
+- ограниченный список моделей/пресетов;
+- короткий TTL для результатов;
+- опциональный watermark/label `demo`, если это нужно для unit economics;
+- обязательные CTA на регистрацию после первого успешного результата, при исчерпании лимита и перед повторным использованием.
 
 ## 10) Realtime model
 
@@ -236,6 +293,8 @@ sequenceDiagram
   participant API
   participant Queue
   participant Worker
+  Client->>API: POST /v1/auth/guest
+  API-->>Client: guest session
   Client->>API: POST /v1/jobs
   API->>Queue: enqueue(jobId)
   API-->>Client: 202 Accepted + jobId
@@ -245,6 +304,8 @@ sequenceDiagram
   API-->>Client: job.status(processing)
   Worker->>API: status completed + resultRef
   API-->>Client: job.result(downloadUrl, expiresAt)
+  Client->>API: POST /v1/auth/upgrade
+  API-->>Client: registered session + migrated context
 ```
 
 ### 10.1 Надежность
@@ -330,6 +391,8 @@ sequenceDiagram
 | Privacy leakage in logs | Security incident | Redaction middleware + denylist |
 | Duplicate retries | Неконсистентный state | Idempotency keys + unique constraints |
 | Queue overload | Растет время ожидания | Admission control + worker scaling |
+| Abuse through anonymous access | Рост затрат и спама | Guest quotas, IP/device rate limit, captcha/risk checks |
+| Guest-to-user migration loss | Потеря demo-ценности и конверсии | Явная model upgrade, перенос контекста и событий |
 
 ## 15) Implementation roadmap
 
@@ -337,7 +400,9 @@ sequenceDiagram
 
 - стабилизировать monorepo (`web`, `api`, `worker`);
 - добавить shared DTO/schemas package;
-- реализовать базовую web auth и session flow.
+- реализовать guest + user auth и session flow;
+- реализовать `email + password` auth для MVP;
+- реализовать onboarding/demo entrypoint и upgrade flow в регистрацию.
 
 ### Phase 2: Generation pipeline
 
@@ -355,13 +420,17 @@ sequenceDiagram
 
 - масштабирование worker;
 - billing/quota module;
-- fallback policy по AI provider.
+- fallback policy по AI provider;
+- добавить OAuth login через `VK ID` и `Yandex ID`;
+- оптимизация guest-to-signup конверсии через продуктовую аналитику и эксперименты.
 
 ## 16) Production readiness checklist
 
 - [ ] DTO validation на каждой внешней границе
 - [ ] Idempotency для job creation и provider callbacks
 - [ ] WebSocket auth, reconnect и state reconciliation
+- [ ] Guest session lifecycle и upgrade в user без потери job history текущей сессии
+- [ ] Password hashing и session cookie policy задокументированы и реализованы
 - [ ] No persistent image storage
 - [ ] Документированный DB migration/rollback flow
 - [ ] Настроенные SLO и alert thresholds
@@ -373,6 +442,8 @@ sequenceDiagram
 Выбранная архитектура `React/Vite/TypeScript + Fastify + PostgreSQL + Redis/BullMQ + WebSocket` подходит для:
 
 - быстрого запуска web-продукта;
+- показа ценности продукта до регистрации через demo/trial доступ;
+- мягкой конверсии гостя в зарегистрированного пользователя;
 - постепенного роста без лишней платформенной сложности;
 - приватной обработки пользовательских изображений;
 - простого VPS-деплоя без избыточной инфраструктуры.
