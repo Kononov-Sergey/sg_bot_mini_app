@@ -100,8 +100,9 @@ apps/web/src/
     index.tsx
     about.tsx
   pages/
-    home.page.tsx
-    about.page.tsx
+    HomePage.tsx
+    GenerationPage.tsx
+    AboutPage.tsx
   features/
     auth/
       components/
@@ -111,6 +112,7 @@ apps/web/src/
       types/
     generation/
       components/
+        GenerationForm.tsx
       hooks/
       services/
       schemas/
@@ -139,7 +141,14 @@ apps/web/src/
   main.tsx
 ```
 
-### 6.3 File-based routing conventions (TanStack Router)
+### 6.3 Naming conventions
+
+- **Компоненты React:** всегда `PascalCase.tsx` (`HomePage.tsx`, `GenerationForm.tsx`). Исключения:
+  - `routes/*` (роуты TanStack Router: `__root.tsx`, `index.tsx`, `about.tsx`);
+  - `components/ui/*` (компоненты shadcn/ui остаются в kebab-case).
+- **Не-компоненты:** `kebab-case.ts` (типы, схемы, константы, утилиты, хуки).
+
+### 6.4 File-based routing conventions (TanStack Router)
 
 - маршруты описываются только в `src/routes/*` через `createFileRoute`/`createRootRoute`;
 - `src/router.tsx` содержит только `createRouter({ routeTree })` и типизацию `Register`;

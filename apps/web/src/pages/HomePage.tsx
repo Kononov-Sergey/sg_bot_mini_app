@@ -1,4 +1,4 @@
-function App() {
+export function HomePage() {
   return (
     <section>
       <h1>SG Bot App</h1>
@@ -6,5 +6,3 @@ function App() {
     </section>
   )
 }
-
-export default App
