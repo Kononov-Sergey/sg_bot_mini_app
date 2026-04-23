@@ -83,28 +83,71 @@ flowchart LR
 - `app/shared` - UI primitives, утилиты и общие хуки;
 - `app/lib` - инфраструктурные helper-функции.
 
-### 6.2 Рекомендуемая структура
+### 6.2 File-type based folder structure (target)
 
 ```text
 apps/web/src/
   app/
-    core/
+    providers/
+      query-client.ts
+      router.tsx
+    store/
+      ui.store.ts
+    config/
+      env.ts
+  routes/
+    __root.tsx
+    index.tsx
+    about.tsx
+  pages/
+    home.page.tsx
+    about.page.tsx
+  features/
+    auth/
+      components/
+      hooks/
+      services/
+      schemas/
+      types/
+    generation/
+      components/
+      hooks/
+      services/
+      schemas/
+      types/
+  entities/
+    user/
+      model/
       api/
-      dto/
-      domain/
-      state/
-    features/
-      auth/
-      onboarding/
-      demo-access/
-      generation/
-      job-status/
-    shared/
-      ui/
-      lib/
+      schema/
+      types/
+    job/
+      model/
+      api/
+      schema/
+      types/
+  shared/
+    ui/
+    hooks/
+    lib/
+    api/
+    schemas/
+    types/
+  styles/
+    tokens.css
+    globals.css
+  main.tsx
 ```
 
-### 6.3 Data flow
+### 6.3 File-based routing conventions (TanStack Router)
+
+- маршруты описываются только в `src/routes/*` через `createFileRoute`/`createRootRoute`;
+- `src/router.tsx` содержит только `createRouter({ routeTree })` и типизацию `Register`;
+- `routeTree.gen.ts` генерируется автоматически плагином `@tanstack/router-plugin` и должен храниться в репозитории;
+- layout-уровень и shell-логика размещаются в `routes/__root.tsx`;
+- экранная логика и тяжелые компоненты живут вне `routes/*` (в `pages/*` или `features/*`), а route-файлы остаются тонкими.
+
+### 6.4 Data flow
 
 - TanStack Query хранит server state: `session`, `jobs`, `jobStatus`;
 - Zustand хранит UI state, временные формы и состояние websocket-подключения;
